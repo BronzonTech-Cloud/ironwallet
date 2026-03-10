@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+.env
+.idea/
+.vscode/
+*.swp
+*.sqlite3
+docker-compose.override.yml
+postgres_data/

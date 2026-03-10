@@ -1,0 +1,132 @@
+services:
+  # Infrastructure
+  postgres:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: ironwallet # Default DB
+    ports:
+      - "5435:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init_sql:/docker-entrypoint-initdb.d # For creating multiple DBs
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    ports:
+      - "6379:6379"
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    restart: always
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+
+  # Microservices
+  gateway:
+    build: 
+      context: .
+      dockerfile: ./gateway/Dockerfile
+    ports:
+      - "8000:8000"
+    depends_on:
+      - auth-service
+      - wallet-service
+      - transaction-service
+      - notification-service
+      - admin-service
+      - redis
+    environment:
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - AUTH_SERVICE_URL=${AUTH_SERVICE_URL:-http://auth-service:8000}
+      - WALLET_SERVICE_URL=${WALLET_SERVICE_URL:-http://wallet-service:8000}
+      - TRANSACTION_SERVICE_URL=${TRANSACTION_SERVICE_URL:-http://transaction-service:8000}
+      - ADMIN_SERVICE_URL=${ADMIN_SERVICE_URL:-http://admin-service:8000}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-supersecretkey}
+    volumes:
+      - ./gateway:/app
+      - ./shared:/shared
+
+  auth-service:
+    build:
+      context: .
+      dockerfile: ./auth-service/Dockerfile
+    depends_on:
+      - postgres
+      - rabbitmq
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@postgres:5432/auth_db
+      - RABBITMQ_URL=amqp://${RABBITMQ_DEFAULT_USER:-guest}:${RABBITMQ_DEFAULT_PASS:-guest}@rabbitmq:5672/
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-supersecretkey}
+    volumes:
+      - ./auth-service:/app
+      - ./shared:/shared
+
+  wallet-service:
+    build:
+      context: .
+      dockerfile: ./wallet-service/Dockerfile
+    depends_on:
+      - postgres
+      - redis
+      - rabbitmq
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@postgres:5432/wallet_db
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/1}
+      - RABBITMQ_URL=amqp://${RABBITMQ_DEFAULT_USER:-guest}:${RABBITMQ_DEFAULT_PASS:-guest}@rabbitmq:5672/
+    volumes:
+      - ./wallet-service:/app
+      - ./shared:/shared
+
+  transaction-service:
+    build:
+      context: .
+      dockerfile: ./transaction-service/Dockerfile
+    depends_on:
+      - postgres
+      - redis
+      - rabbitmq
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@postgres:5432/transaction_db
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/2}
+      - RABBITMQ_URL=amqp://${RABBITMQ_DEFAULT_USER:-guest}:${RABBITMQ_DEFAULT_PASS:-guest}@rabbitmq:5672/
+      - WALLET_SERVICE_URL=${WALLET_SERVICE_URL:-http://wallet-service:8000}
+    volumes:
+      - ./transaction-service:/app
+      - ./shared:/shared
+
+  notification-service:
+    build:
+      context: .
+      dockerfile: ./notification-service/Dockerfile
+    depends_on:
+      - rabbitmq
+    environment:
+      - RABBITMQ_URL=amqp://${RABBITMQ_DEFAULT_USER:-guest}:${RABBITMQ_DEFAULT_PASS:-guest}@rabbitmq:5672/
+    volumes:
+      - ./notification-service:/app
+      - ./shared:/shared
+
+  admin-service:
+    build:
+      context: .
+      dockerfile: ./admin-service/Dockerfile
+    depends_on:
+      - postgres
+    environment:
+      - DATABASE_URL_AUTH=postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@postgres:5432/auth_db
+      - DATABASE_URL_WALLET=postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@postgres:5432/wallet_db
+      - DATABASE_URL_TRANSACTION=postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@postgres:5432/transaction_db
+    volumes:
+      - ./admin-service:/app
+      - ./shared:/shared
+
+volumes:
+  postgres_data:

@@ -1,0 +1,97 @@
+name: IronWallet CI
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: user
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: ironwallet # Default
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      rabbitmq:
+        image: rabbitmq:3-management-alpine
+        ports:
+          - 5672:5672
+        env:
+          RABBITMQ_DEFAULT_USER: guest
+          RABBITMQ_DEFAULT_PASS: guest
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.12"
+
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r auth-service/requirements.txt
+        pip install -r wallet-service/requirements.txt
+        pip install -r transaction-service/requirements.txt
+        pip install -r notification-service/requirements.txt
+        pip install -r django-service/requirements.txt || true # Just in case
+        pip install pytest httpx requests
+
+    - name: Initialize Databases
+      run: |
+        # Wait for Postgres
+        sleep 5
+        PGPASSWORD=password psql -h localhost -U user -d ironwallet -c "CREATE DATABASE auth_db;"
+        PGPASSWORD=password psql -h localhost -U user -d ironwallet -c "CREATE DATABASE wallet_db;"
+        PGPASSWORD=password psql -h localhost -U user -d ironwallet -c "CREATE DATABASE transaction_db;"
+
+    - name: Run Unit Tests (Auth)
+      env: 
+        DATABASE_URL: postgresql://user:password@localhost:5432/auth_db
+        PYTHONPATH: ${{ github.workspace }}
+      run: |
+        pytest auth-service/test_main.py
+
+    - name: Run Unit Tests (Wallet)
+      env:
+        DATABASE_URL: postgresql://user:password@localhost:5432/wallet_db
+        REDIS_URL: redis://localhost:6379/1
+        PYTHONPATH: ${{ github.workspace }}
+      run: |
+        pytest wallet-service/test_main.py
+
+    - name: Run Unit Tests (Transaction)
+      env:
+        DATABASE_URL: postgresql://user:password@localhost:5432/transaction_db
+        PYTHONPATH: ${{ github.workspace }}
+      run: |
+        pytest transaction-service/test_main.py
